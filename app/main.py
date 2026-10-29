@@ -1,6 +1,7 @@
 """StockLine v2 — API d'inventaire multi-entrepôts (produits, mouvements, stocks).
 
 Exercice 1 : toutes les routes, sauf /sante et /auth/jeton, exigent un jeton.
+Exercice 2 : un gestionnaire ne voit que son entrepôt ; supprimer est réservé à l'admin.
 
 Lancement en local :
     uvicorn app.main:app --reload
@@ -16,9 +17,9 @@ from sqlalchemy.orm import Session
 
 from app import models, securite
 from app.db import MouvementDB, ProduitDB, get_session, init_db
-from app.securite import Utilisateur, utilisateur_courant
+from app.securite import Utilisateur, exiger_role, utilisateur_courant
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 
 @asynccontextmanager
@@ -82,8 +83,11 @@ def lister_produits(
     session: Session = Depends(get_session),
     utilisateur: Utilisateur = Depends(utilisateur_courant),
 ) -> list[ProduitDB]:
-    """Liste tous les produits."""
-    return list(session.execute(select(ProduitDB).order_by(ProduitDB.id)).scalars())
+    """Liste les produits de l'entrepôt de l'utilisateur (tous pour l'admin)."""
+    requete = select(ProduitDB).order_by(ProduitDB.id)
+    if utilisateur.role != "admin":
+        requete = requete.where(ProduitDB.entrepot == utilisateur.entrepot)
+    return list(session.execute(requete).scalars())
 
 
 @app.post(
@@ -113,10 +117,17 @@ def creer_produit(
     return nouveau
 
 
-def _produit_ou_404(session: Session, produit_id: int) -> ProduitDB:
-    """Renvoie le produit demandé, ou une erreur 404 s'il n'existe pas."""
+def _produit_autorise(session: Session, produit_id: int, utilisateur: Utilisateur) -> ProduitDB:
+    """Renvoie le produit s'il existe ET si l'utilisateur y a droit, sinon 404.
+
+    Un produit d'un autre entrepôt donne la même réponse qu'un produit
+    inexistant : l'API ne révèle pas ce qui existe ailleurs.
+    """
     produit = session.get(ProduitDB, produit_id)
-    if produit is None:
+    autorise = produit is not None and (
+        utilisateur.role == "admin" or produit.entrepot == utilisateur.entrepot
+    )
+    if not autorise:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Produit {produit_id} introuvable.",
@@ -131,7 +142,7 @@ def lire_produit(
     utilisateur: Utilisateur = Depends(utilisateur_courant),
 ) -> ProduitDB:
     """Renvoie un produit par son identifiant."""
-    return _produit_ou_404(session, produit_id)
+    return _produit_autorise(session, produit_id, utilisateur)
 
 
 @app.delete(
@@ -142,10 +153,10 @@ def lire_produit(
 def supprimer_produit(
     produit_id: int,
     session: Session = Depends(get_session),
-    utilisateur: Utilisateur = Depends(utilisateur_courant),
+    utilisateur: Utilisateur = Depends(exiger_role("admin")),
 ) -> None:
-    """Supprime un produit et ses mouvements."""
-    produit = _produit_ou_404(session, produit_id)
+    """Supprime un produit et ses mouvements (admin uniquement)."""
+    produit = _produit_autorise(session, produit_id, utilisateur)
     session.query(MouvementDB).filter(MouvementDB.produit_id == produit.id).delete()
     session.delete(produit)
     session.commit()
@@ -176,8 +187,11 @@ def lister_mouvements(
     session: Session = Depends(get_session),
     utilisateur: Utilisateur = Depends(utilisateur_courant),
 ) -> list[MouvementDB]:
-    """Liste tous les mouvements de stock."""
-    return list(session.execute(select(MouvementDB).order_by(MouvementDB.id)).scalars())
+    """Liste les mouvements des produits de l'entrepôt de l'utilisateur."""
+    requete = select(MouvementDB).order_by(MouvementDB.id)
+    if utilisateur.role != "admin":
+        requete = requete.join(ProduitDB).where(ProduitDB.entrepot == utilisateur.entrepot)
+    return list(session.execute(requete).scalars())
 
 
 @app.post(
@@ -192,7 +206,7 @@ def creer_mouvement(
     utilisateur: Utilisateur = Depends(utilisateur_courant),
 ) -> MouvementDB:
     """Enregistre un mouvement. Une sortie ne peut pas dépasser le stock courant."""
-    produit = _produit_ou_404(session, mouvement.produit_id)
+    produit = _produit_autorise(session, mouvement.produit_id, utilisateur)
     if mouvement.type == models.TypeMouvement.SORTIE:
         stock = _quantite_en_stock(session, produit.id)
         if mouvement.quantite > stock:
@@ -223,7 +237,7 @@ def lire_stock(
     utilisateur: Utilisateur = Depends(utilisateur_courant),
 ) -> models.Stock:
     """Renvoie l'état du stock d'un produit, avec indicateur d'alerte."""
-    produit = _produit_ou_404(session, produit_id)
+    produit = _produit_autorise(session, produit_id, utilisateur)
     quantite = _quantite_en_stock(session, produit.id)
     return models.Stock(
         produit_id=produit.id,

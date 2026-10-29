@@ -1,4 +1,4 @@
-"""StockLine — authentification par jeton JWT (exercice 1).
+"""StockLine — authentification par jeton JWT (exercice 1) et rôles (exercice 2).
 
 Les comptes ci-dessous sont ceux du labo. En production, les comptes vivent
 dans un annuaire (Amazon Cognito, Microsoft Entra ID), jamais dans le code.
@@ -129,3 +129,17 @@ def utilisateur_courant(
         raise refus
     # Le rôle et l'entrepôt viennent du serveur, pas du jeton.
     return Utilisateur(identifiant=charge["sub"], role=compte["role"], entrepot=compte["entrepot"])
+
+
+def exiger_role(*roles: str):
+    """Dépendance FastAPI : réserve une route à certains rôles, sinon 403."""
+
+    def verifier(utilisateur: Utilisateur = Depends(utilisateur_courant)) -> Utilisateur:
+        if utilisateur.role not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Action réservée au rôle : {', '.join(roles)}.",
+            )
+        return utilisateur
+
+    return verifier

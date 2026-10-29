@@ -1,150 +1,112 @@
-# StockLine — Démonstration 01 : authentification JWT
+# StockLine — Démonstration 02 : autorisations (BOLA / BFLA)
 
-**Branche : `01-authentification` · Tag Git : `v0.1` · Image Docker : `christopheutp/stockline-api:0.1` · Port hôte : `8001`**
+**Branche Git : `02-autorisation` · Tag Git : `v0.2` · Image Docker : `christopheutp/stockline-api:0.2` · Port hôte : `8002`**
 
-Cette version reprend **l'intégralité de la démonstration 00** et ajoute une authentification par jeton JWT. Elle est construite à partir des **fichiers officiels de l'exercice 1** fournis dans `securite-api-2j.zip` (`ex1/app/main.py`, `ex1/app/securite.py`, `ex1/tests/test_ex1_authentification.py`). Les autres routes, modèles et données restent inchangés.
+Cette version reprend les étapes **00 — API non sécurisée** et **01 — authentification JWT**, puis ajoute les contrôles d'accès par rôle et par objet. Les changements applicatifs proviennent des fichiers de l'exercice 2 de `securite-api-2j.zip` : `app/main.py`, `app/securite.py` et `tests/test_ex2_autorisation.py`.
 
-> **Laboratoire uniquement.** Les comptes de test et mots de passe sont publics et les versions successives conservent volontairement des faiblesses à corriger. Ne pas exposer directement ces conteneurs à Internet ni les utiliser avec de vraies données.
+> **Usage pédagogique exclusivement.** Comptes et mots de passe de démonstration, autres faiblesses volontairement conservées. Ne pas exposer sur Internet ni utiliser de données réelles.
 
-## Risque OWASP couvert
+## Correspondance OWASP
 
-**OWASP API Security Top 10 (2023) — API2:2023, Broken Authentication (authentification défaillante).**
+- **API1:2023 — Broken Object Level Authorization (BOLA)** : un gestionnaire ne doit pouvoir consulter et modifier que les produits, mouvements et stocks de **son entrepôt**. Les ressources d'un autre entrepôt retournent `404`, comme les ressources inexistantes.
+- **API5:2023 — Broken Function Level Authorization (BFLA)** : la suppression de produits (`DELETE /produits/{produit_id}`) est réservée au rôle **admin**. Un gestionnaire authentifié reçoit `403 Forbidden`.
 
-- `POST /auth/jeton` vérifie un identifiant et son mot de passe, puis émet un JWT signé (HS256), valable 15 minutes.
-- Les routes métier utilisent `Depends(utilisateur_courant)` et renvoient **401** si le jeton Bearer est absent, invalide ou expiré.
-- `GET /sante` et `POST /auth/jeton` restent publics.
-- `GET /moi` permet de consulter l'identité associée au jeton.
-- Les mots de passe des comptes du laboratoire sont représentés par des empreintes PBKDF2 salées. La clé JWT doit être fournie **hors du code** via `STOCKLINE_JWT_SECRET` (32 caractères minimum).
+L'authentification seule (étape 01) prouvait *qui* était l'utilisateur ; cette étape contrôle *ce qu'il peut faire* et *à quelles données il peut accéder*.
 
-**Limite pédagogique :** cette étape authentifie les utilisateurs, mais ne vérifie **pas encore** quels produits, entrepôts ou opérations chacun a le droit d'utiliser. L'autorisation sera ajoutée dans la démonstration 02 (API1 et API5).
+## Lancement sur Windows (PowerShell)
 
-## Lancement Docker sur Windows (PowerShell)
-
-Prérequis : Docker Desktop démarré. Créer une clé de signature temporaire propre à cette exécution :
+Docker Desktop doit être démarré. La clé JWT est générée localement et transmise au conteneur à l'exécution. Dans un terminal PowerShell :
 
 ```powershell
 $env:STOCKLINE_JWT_SECRET = ([guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N'))
+docker pull christopheutp/stockline-api:0.2
+docker run --rm --name stockline-02 -p 127.0.0.1:8002:8000 -e STOCKLINE_JWT_SECRET christopheutp/stockline-api:0.2
 ```
 
-Télécharger l'image si nécessaire :
+- Swagger : <http://localhost:8002/docs>
+- Santé : <http://localhost:8002/sante>
+- Produits : <http://localhost:8002/produits> (nécessite un JWT)
 
-```powershell
-docker pull christopheutp/stockline-api:0.1
-```
+Arrêter avec `Ctrl+C`. La base SQLite du conteneur est indépendante des autres versions ; sans volume Docker, elle est réinitialisée lors de la création d'un nouveau conteneur.
 
-Lancer le conteneur sur le **port 8001 du PC**, le port interne restant `8000` :
+## Démonstration comparative : 01 contre 02
 
-```powershell
-docker run --rm --name stockline-01 -p 127.0.0.1:8001:8000 -e STOCKLINE_JWT_SECRET christopheutp/stockline-api:0.1
-```
-
-- Swagger : <http://localhost:8001/docs>
-- Santé (sans authentification) : <http://localhost:8001/sante>
-- Produits (sans jeton : `401`) : <http://localhost:8001/produits>
-
-Pour arrêter : `Ctrl+C` dans le terminal du conteneur. La variable d'environnement PowerShell n'est nécessaire que pour le lancement, pas pour télécharger l'image.
-
-## Démonstration avant / après
-
-Faire tourner les deux versions simultanément, dans **deux terminaux** PowerShell. Pour la version 00 :
-
-```powershell
-docker run --rm --name stockline-00 -p 127.0.0.1:8000:8000 christopheutp/stockline-api:0.0
-```
-
-Pour la version 01 :
+Exécuter l'API `0.1` sur le port **8001** (dans un terminal distinct, avec une clé JWT générée de la même manière), et l'API `0.2` sur **8002**. Les deux bases contiennent les mêmes données initiales.
 
 ```powershell
 $env:STOCKLINE_JWT_SECRET = ([guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N'))
 docker run --rm --name stockline-01 -p 127.0.0.1:8001:8000 -e STOCKLINE_JWT_SECRET christopheutp/stockline-api:0.1
 ```
 
-Tester sans jeton :
+Ouvrir un **troisième terminal PowerShell** pour les tests ci-dessous. Les requêtes récupèrent un jeton pour chaque version, car leurs clés peuvent être différentes.
 
 ```powershell
-curl.exe -i http://localhost:8000/produits
-curl.exe -i http://localhost:8001/produits
+function Get-StocklineToken($port, $identifiant, $motDePasse) {
+    $corps = @{ identifiant = $identifiant; mot_de_passe = $motDePasse } | ConvertTo-Json
+    (Invoke-RestMethod -Uri "http://localhost:$port/auth/jeton" -Method Post -ContentType 'application/json' -Body $corps).access_token
+}
+$alice01 = Get-StocklineToken 8001 'alice' 'Paris-Stock-2026'
+$alice02 = Get-StocklineToken 8002 'alice' 'Paris-Stock-2026'
+$admin02 = Get-StocklineToken 8002 'admin' 'Admin-Stock-2026'
 ```
 
-**Résultat attendu :** `200 OK` pour la version 00, `401 Unauthorized` pour la version 01.
-
-Obtenir ensuite un jeton (PowerShell) et effectuer le même appel avec authentification :
+### A. Contrôle d'accès aux objets — API1 / BOLA
 
 ```powershell
-$corps = @{ identifiant = 'alice'; mot_de_passe = 'Paris-Stock-2026' } | ConvertTo-Json
-$reponse = Invoke-RestMethod -Uri 'http://localhost:8001/auth/jeton' -Method Post -ContentType 'application/json' -Body $corps
-$jeton = $reponse.access_token
-Invoke-RestMethod -Uri 'http://localhost:8001/moi' -Headers @{ Authorization = "Bearer $jeton" }
-Invoke-RestMethod -Uri 'http://localhost:8001/produits' -Headers @{ Authorization = "Bearer $jeton" }
+# Version 01 : Alice peut consulter un produit de Lyon (faille)
+curl.exe -i -H "Authorization: Bearer $alice01" http://localhost:8001/produits/4
+
+# Version 02 : le même accès est refusé (404)
+curl.exe -i -H "Authorization: Bearer $alice02" http://localhost:8002/produits/4
+
+# Version 02 : Alice consulte les produits de Paris uniquement
+curl.exe -i -H "Authorization: Bearer $alice02" http://localhost:8002/produits
 ```
 
-**Résultat attendu :** identité d'Alice et liste des produits. On peut aussi utiliser Swagger et son bouton **Authorize** : saisir le jeton Bearer.
+### B. Contrôle d'accès aux fonctions — API5 / BFLA
 
-### Comptes du laboratoire
+```powershell
+# Version 02 : Alice n'est pas autorisée à supprimer (403)
+curl.exe -i -X DELETE -H "Authorization: Bearer $alice02" http://localhost:8002/produits/1
+
+# Version 02 : l'admin peut supprimer (204) — modifie seulement la base de 02
+curl.exe -i -X DELETE -H "Authorization: Bearer $admin02" http://localhost:8002/produits/1
+```
+
+**Attention :** le dernier appel supprime réellement le produit de la base de démonstration de la version 02 ; redémarrer le conteneur pour retrouver le jeu de données initial.
+
+## Comptes de démonstration
 
 | Identifiant | Mot de passe | Rôle | Entrepôt |
 |---|---|---|---|
-| `alice` | `Paris-Stock-2026` | gestionnaire | paris |
-| `bruno` | `Lyon-Stock-2026` | gestionnaire | lyon |
-| `admin` | `Admin-Stock-2026` | admin | — |
+| `alice` | `Paris-Stock-2026` | gestionnaire | Paris |
+| `bruno` | `Lyon-Stock-2026` | gestionnaire | Lyon |
+| `admin` | `Admin-Stock-2026` | admin | Tous |
 
-Ces identifiants ne conviennent **qu'à cette démonstration locale**.
+## Ports de toutes les versions
 
-## Plan de ports pour toutes les versions
-
-Chaque conteneur écoute toujours le port **8000 en interne**, mais expose un port **différent sur le PC**. Les noms de conteneurs doivent aussi être uniques.
-
-| Branche | Tag Docker | Port PC | Swagger |
+| Démonstration | Tag Docker | Port hôte | Swagger |
 |---|---|---:|---|
-| `00-api-vulnerable` | `0.0` | 8000 | <http://localhost:8000/docs> |
-| `01-authentification` | `0.1` | 8001 | <http://localhost:8001/docs> |
-| `02-autorisation` | `0.2` | 8002 | <http://localhost:8002/docs> |
-| `03-protection-donnees` | `0.3` | 8003 | <http://localhost:8003/docs> |
-| `04-limitation-ressources` | `0.4` | 8004 | <http://localhost:8004/docs> |
+| 00 — Initiale | `0.0` | 8000 | <http://localhost:8000/docs> |
+| 01 — JWT | `0.1` | 8001 | <http://localhost:8001/docs> |
+| 02 — Autorisations | `0.2` | 8002 | <http://localhost:8002/docs> |
+| 03 — Propriétés (à venir) | `0.3` | 8003 | <http://localhost:8003/docs> |
+| 04 — Ressources (à venir) | `0.4` | 8004 | <http://localhost:8004/docs> |
 
-Les trois dernières images seront accessibles **après** leur publication. Chacun des conteneurs utilisera sa **propre base SQLite** dans `/data` (aucun volume partagé), donc les données sont indépendantes. Prévoir suffisamment de mémoire pour les exécuter simultanément.
+Le port **interne** reste toujours `8000`. Chaque conteneur a un nom et un port hôte différents, sans partage de la base SQLite.
 
-## Démarrer et vérifier localement (sans Docker)
+## Tests et publication sur Docker Hub
 
-À partir de la racine du dépôt :
+`pytest -q` exécute les tests historiques, JWT et autorisation ; GitHub Actions lance les tests sur les pushes de la branche `02-autorisation`. La publication sur Docker Hub n'est déclenchée que pour le tag Git `v0.2` (ou le workflow manuel sur cette branche) et produit les images `linux/amd64` et `linux/arm64` sous le tag `christopheutp/stockline-api:0.2`.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-export STOCKLINE_JWT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-pytest -q
-uvicorn app.main:app --host 127.0.0.1 --port 8001
+```powershell
+git switch 02-autorisation
+git tag v0.2
+git push origin v0.2
 ```
 
-Sur AWS CloudShell, `relancer-api.sh` reste disponible et génère un secret dans `.secret-jwt` (à ne pas committer). Le script lance l'API sur le port 8000.
-
-## Tests
-
-Le workflow GitHub Actions exécute `pytest -q` à chaque push sur cette branche. Le fichier `tests/test_ex1_authentification.py` contrôle notamment :
-
-- Le refus des accès sans jeton (`401`).
-- Le refus d'un mauvais mot de passe.
-- L'identification par un jeton valide.
-- Le refus des jetons expirés et des signatures incorrectes.
-- L'obligation de fournir une clé suffisamment longue.
-
-Les tests fonctionnels historiques sont conservés.
-
-## Publication automatisée sur Docker Hub
-
-Le workflow `.github/workflows/docker-publish.yml` exécute les tests sur la branche `01-authentification` et publie `christopheutp/stockline-api:0.1` **uniquement lorsque le tag Git `v0.1` est poussé**, ou lors d'un déclenchement manuel sur cette branche.
-
-Le secret GitHub `DOCKERHUB_TOKEN` créé pour la version 00 est réutilisé : aucun nouveau secret n'est nécessaire.
-
-```bash
-git switch 01-authentification
-git tag v0.1
-git push origin v0.1
-```
-
-Ne créer le tag **qu'après** avoir vérifié les tests de la branche. Ne pas réutiliser `v0.0` : il correspond déjà à l'image précédente.
+Le secret GitHub `DOCKERHUB_TOKEN` existant est réutilisé.
 
 ## Étape suivante
 
-`02-autorisation` : contrôle des droits par rôle et par objet / entrepôt (API1:2023 BOLA et API5:2023 BFLA).
+**03 — Protection des propriétés**, en lien avec **API3:2023 — Broken Object Property Level Authorization** : filtrer explicitement les champs acceptés en entrée et ceux renvoyés en sortie via des DTO / schémas Pydantic.
