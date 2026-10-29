@@ -1,7 +1,6 @@
 """StockLine v2 — API d'inventaire multi-entrepôts (produits, mouvements, stocks).
 
-Point de départ du module « Sécurité des API » : l'API fonctionne,
-mais elle n'a encore aucune protection.
+Exercice 1 : toutes les routes, sauf /sante et /auth/jeton, exigent un jeton.
 
 Lancement en local :
     uvicorn app.main:app --reload
@@ -15,10 +14,11 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, securite
 from app.db import MouvementDB, ProduitDB, get_session, init_db
+from app.securite import Utilisateur, utilisateur_courant
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 
 @asynccontextmanager
@@ -52,11 +52,36 @@ def sante(session: Session = Depends(get_session)) -> models.Sante:
 
 
 # ---------------------------------------------------------------------------
+# Authentification (exercice 1)
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/jeton", response_model=securite.Jeton, tags=["authentification"])
+def obtenir_jeton(identifiants: securite.Identifiants) -> securite.Jeton:
+    """Échange un identifiant et un mot de passe contre un jeton de 15 minutes."""
+    if not securite.verifier_mot_de_passe(identifiants.identifiant, identifiants.mot_de_passe):
+        # Même message que le compte existe ou non.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Identifiant ou mot de passe incorrect.",
+        )
+    return securite.creer_jeton(identifiants.identifiant)
+
+
+@app.get("/moi", response_model=Utilisateur, tags=["authentification"])
+def moi(utilisateur: Utilisateur = Depends(utilisateur_courant)) -> Utilisateur:
+    """Renvoie l'utilisateur correspondant au jeton."""
+    return utilisateur
+
+
+# ---------------------------------------------------------------------------
 # Produits
 # ---------------------------------------------------------------------------
 
 @app.get("/produits", response_model=list[models.Produit], tags=["produits"])
-def lister_produits(session: Session = Depends(get_session)) -> list[ProduitDB]:
+def lister_produits(
+    session: Session = Depends(get_session),
+    utilisateur: Utilisateur = Depends(utilisateur_courant),
+) -> list[ProduitDB]:
     """Liste tous les produits."""
     return list(session.execute(select(ProduitDB).order_by(ProduitDB.id)).scalars())
 
@@ -68,7 +93,9 @@ def lister_produits(session: Session = Depends(get_session)) -> list[ProduitDB]:
     tags=["produits"],
 )
 def creer_produit(
-    produit: models.ProduitCreate, session: Session = Depends(get_session)
+    produit: models.ProduitCreate,
+    session: Session = Depends(get_session),
+    utilisateur: Utilisateur = Depends(utilisateur_courant),
 ) -> ProduitDB:
     """Crée un produit. La référence doit être unique."""
     existant = session.execute(
@@ -98,7 +125,11 @@ def _produit_ou_404(session: Session, produit_id: int) -> ProduitDB:
 
 
 @app.get("/produits/{produit_id}", response_model=models.Produit, tags=["produits"])
-def lire_produit(produit_id: int, session: Session = Depends(get_session)) -> ProduitDB:
+def lire_produit(
+    produit_id: int,
+    session: Session = Depends(get_session),
+    utilisateur: Utilisateur = Depends(utilisateur_courant),
+) -> ProduitDB:
     """Renvoie un produit par son identifiant."""
     return _produit_ou_404(session, produit_id)
 
@@ -108,7 +139,11 @@ def lire_produit(produit_id: int, session: Session = Depends(get_session)) -> Pr
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["produits"],
 )
-def supprimer_produit(produit_id: int, session: Session = Depends(get_session)) -> None:
+def supprimer_produit(
+    produit_id: int,
+    session: Session = Depends(get_session),
+    utilisateur: Utilisateur = Depends(utilisateur_courant),
+) -> None:
     """Supprime un produit et ses mouvements."""
     produit = _produit_ou_404(session, produit_id)
     session.query(MouvementDB).filter(MouvementDB.produit_id == produit.id).delete()
@@ -137,7 +172,10 @@ def _quantite_en_stock(session: Session, produit_id: int) -> int:
 
 
 @app.get("/mouvements", response_model=list[models.Mouvement], tags=["mouvements"])
-def lister_mouvements(session: Session = Depends(get_session)) -> list[MouvementDB]:
+def lister_mouvements(
+    session: Session = Depends(get_session),
+    utilisateur: Utilisateur = Depends(utilisateur_courant),
+) -> list[MouvementDB]:
     """Liste tous les mouvements de stock."""
     return list(session.execute(select(MouvementDB).order_by(MouvementDB.id)).scalars())
 
@@ -149,7 +187,9 @@ def lister_mouvements(session: Session = Depends(get_session)) -> list[Mouvement
     tags=["mouvements"],
 )
 def creer_mouvement(
-    mouvement: models.MouvementCreate, session: Session = Depends(get_session)
+    mouvement: models.MouvementCreate,
+    session: Session = Depends(get_session),
+    utilisateur: Utilisateur = Depends(utilisateur_courant),
 ) -> MouvementDB:
     """Enregistre un mouvement. Une sortie ne peut pas dépasser le stock courant."""
     produit = _produit_ou_404(session, mouvement.produit_id)
@@ -177,7 +217,11 @@ def creer_mouvement(
 # ---------------------------------------------------------------------------
 
 @app.get("/stocks/{produit_id}", response_model=models.Stock, tags=["stocks"])
-def lire_stock(produit_id: int, session: Session = Depends(get_session)) -> models.Stock:
+def lire_stock(
+    produit_id: int,
+    session: Session = Depends(get_session),
+    utilisateur: Utilisateur = Depends(utilisateur_courant),
+) -> models.Stock:
     """Renvoie l'état du stock d'un produit, avec indicateur d'alerte."""
     produit = _produit_ou_404(session, produit_id)
     quantite = _quantite_en_stock(session, produit.id)

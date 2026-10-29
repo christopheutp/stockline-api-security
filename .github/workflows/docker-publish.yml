@@ -3,9 +3,9 @@ name: Tests et publication Docker
 on:
   push:
     branches:
-      - 00-api-vulnerable
+      - 01-authentification
     tags:
-      - 'v0.0'
+      - 'v0.1'
   workflow_dispatch:
 
 permissions:
@@ -30,9 +30,9 @@ jobs:
   docker:
     needs: test
     runs-on: ubuntu-latest
-    # Seul le tag Git v0.0 (ou le déclenchement manuel sur cette branche)
+    # Seul le tag Git v0.1 (ou le déclenchement manuel sur cette branche)
     # publie l'image Docker 0.0 : un push sur la branche lance seulement les tests.
-    if: github.ref == 'refs/tags/v0.0' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/00-api-vulnerable')
+    if: github.ref == 'refs/tags/v0.1' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/01-authentification')
     steps:
       - name: Récupérer le code
         uses: actions/checkout@v6
@@ -49,4 +49,4 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: christopheutp/stockline-api:0.0
+          tags: christopheutp/stockline-api:0.1
