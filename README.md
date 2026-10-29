@@ -1,71 +1,87 @@
-# StockLine API — Démonstrations de sécurité des API
+# StockLine — Démonstration 00 : API initiale non sécurisée
 
-Ce dépôt accompagne une formation de **deux jours sur la sécurité des API REST**, basée sur les recommandations **OWASP API Security Top 10 (2023)**.
+**Version pédagogique : 00** · **Branche : `00-api-vulnerable`** · **Image Docker : `christopheutp/stockline-api:0.0`**
 
-L'objectif est de suivre la sécurisation progressive de **StockLine**, une API de gestion de stocks multi-entrepôts. Chaque branche présente une version fonctionnelle de l'API et illustre une ou plusieurs protections ajoutées à l'étape précédente.
+Cette branche contient le **code initial fourni dans `stockline-api.zip`**, sans modification des routes ni des règles métier. L'application FastAPI gère les produits et mouvements de stocks de deux entrepôts (`paris` et `lyon`), avec SQLite et SQLAlchemy. Cette version n'implémente **aucune authentification ni autorisation** : elle sert de point de comparaison pour les démonstrations suivantes.
 
-> **Usage pédagogique uniquement.** Certaines branches présentent volontairement des vulnérabilités. Elles doivent être exécutées dans un environnement de démonstration isolé, sans exposition publique ni données réelles.
+> **Laboratoire uniquement.** Ne pas publier ce service sur Internet, le relier à des données réelles ni réutiliser ses configurations en production. Le port Docker est lié à `127.0.0.1` dans les commandes proposées.
 
-## Technologies
+## Objectifs de la démonstration
 
-- **Python / FastAPI** : API REST et documentation OpenAPI interactive
-- **Pydantic** : validation et contrôle des données
-- **SQLAlchemy / SQLite** : persistance et données de démonstration
-- **Pytest** : tests fonctionnels et de sécurité
-- **Docker** : exécution reproductible des différentes versions
-- **GitHub** : suivi des évolutions de l'API
+1. Découvrir `/docs` et les routes FastAPI.
+2. Interroger les produits et les stocks sans identité.
+3. Constater que les opérations de modification ne requièrent aucune authentification.
+4. Relever les risques qui seront étudiés aux étapes suivantes.
 
-## Parcours des démonstrations
+## Références OWASP API Security Top 10 (2023)
 
-| Branche | Démonstration | Référence OWASP API Security Top 10 (2023) | Version Docker prévue |
-| --- | --- | --- | --- |
-| `00-api-vulnerable` | Découverte de l'API initiale non sécurisée | État initial présentant plusieurs risques | `0.0` |
-| `01-authentification` | Ajout de l'authentification par jetons JWT | **API2:2023** — Broken Authentication | `0.1` |
-| `02-autorisation` | Contrôle des rôles et des accès aux ressources | **API1:2023** — Broken Object Level Authorization ; **API5:2023** — Broken Function Level Authorization | `0.2` |
-| `03-protection-donnees` | Contrôle des propriétés exposées et modifiables via les schémas Pydantic | **API3:2023** — Broken Object Property Level Authorization | `0.3` |
-| `04-limitation-ressources` | Limitation des requêtes et de la consommation de ressources | **API4:2023** — Unrestricted Resource Consumption | `0.4` |
+- **API2:2023 — Broken Authentication** : ici, aucune authentification n'est imposée.
+- **API1:2023 — Broken Object Level Authorization** et **API5:2023 — Broken Function Level Authorization** : aucun contrôle de droits utilisateur n'est effectué.
+- **API3:2023 — Broken Object Property Level Authorization** : la protection des propriétés sera étudiée à l'étape 03.
+- **API4:2023 — Unrestricted Resource Consumption** : la limitation des appels sera étudiée à l'étape 04.
 
-Chaque branche conserve les protections introduites dans les étapes précédentes. Les références OWASP indiquent les **risques étudiés**, et ne constituent pas une certification de conformité ni une garantie de couverture exhaustive.
+Ces correspondances désignent des thèmes pédagogiques, pas un audit OWASP exhaustif.
 
-## Organisation du dépôt
+## Lancer avec Docker
 
-La branche **`main`** sert uniquement de page d'accueil et de guide de navigation.
+Prérequis : Docker installé et démarré. Après publication de l'image :
 
-Pour consulter le code d'une démonstration, sélectionner la branche correspondante dans le menu des branches GitHub, ou cloner le dépôt puis exécuter :
+```bash
+docker run --rm --name stockline -p 127.0.0.1:8000:8000 christopheutp/stockline-api:0.0
+```
+
+- Documentation interactive : <http://localhost:8000/docs>
+- Vérification de santé : <http://localhost:8000/sante>
+- Liste des produits : <http://localhost:8000/produits>
+
+Pour arrêter : `Ctrl+C` dans le terminal Docker. Sans volume, la base de démonstration est recréée pour chaque nouveau conteneur. Pour conserver la base : ajouter `-v stockline-data:/data` à la commande `docker run` (attention : les données restent alors persistantes entre les étapes).
+
+Pour construire localement au lieu de télécharger l'image :
+
+```bash
+docker build -t stockline-api:0.0 .
+docker run --rm --name stockline -p 127.0.0.1:8000:8000 stockline-api:0.0
+```
+
+## Lancer sans Docker (CloudShell ou ordinateur)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest -q
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Sur Windows, l'activation du venv s'effectue différemment ; sur CloudShell, `relancer-api.sh` reste disponible pour un démarrage en arrière-plan.
+
+## Vérification de la démonstration
+
+Depuis `/docs`, lancer `GET /produits`, puis tester une opération d'écriture sur des données fictives. Observer qu'aucun jeton d'accès n'est exigé. Refaire ensuite les appels sur les branches suivantes pour visualiser les protections ajoutées.
+
+## Fichiers
+
+- `app/` : code source initial (inchangé).
+- `tests/` et `pytest.ini` : tests fonctionnels fournis.
+- `requirements.txt` : dépendances fournies.
+- `relancer-api.sh` : script initial pour CloudShell, **non utilisé dans Docker**.
+- `Dockerfile`, `.dockerignore` : construction du conteneur.
+- `.github/workflows/docker-publish.yml` : tests automatiques et publication Docker.
+
+## Publication automatique
+
+Créer dans les **Secrets and variables → Actions** du dépôt GitHub un secret `DOCKERHUB_TOKEN` contenant un **access token Docker Hub** autorisé à publier dans `christopheutp/stockline-api`. Ne jamais mettre ce jeton dans un fichier versionné.
+
+Le workflow lance les tests à chaque push sur `00-api-vulnerable`. Il publie l'image `0.0` **uniquement** quand le tag Git `v0.0` est poussé (ou lors d'un déclenchement manuel du workflow sur cette branche). Le tag doit être créé à partir de cette branche :
 
 ```bash
 git switch 00-api-vulnerable
+git tag v0.0
+git push origin v0.0
 ```
 
-Les branches successives contiennent le code Python, les tests, et la documentation propre à chaque étape. Des tags Git permettront également de figer les versions présentées en formation.
+Vérifier ensuite l'exécution dans l'onglet **Actions** du dépôt et la présence de `christopheutp/stockline-api:0.0` sur Docker Hub.
 
-## Exécution avec Docker
+## Étape suivante
 
-L'objectif est de distribuer les cinq étapes au moyen d'**un seul dépôt d'images Docker, décliné en tags numérotés**.
-
-Une fois les images publiées, le principe de lancement sera le suivant :
-
-```bash
-docker run --rm -p 8000:8000 christopheutp/stockline-api:0.0
-```
-
-Pour lancer une étape ultérieure, remplacer `0.0` par `0.1`, `0.2`, `0.3` ou `0.4`.
-
-La documentation interactive de FastAPI sera accessible sur : **http://localhost:8000/docs**.
-
-
-## Démonstrations et évaluations
-
-Les étapes de sécurisation sont des **démonstrations guidées** : elles permettent de comparer le comportement de l'API avant et après chaque correction. Les **quiz** constituent les évaluations des acquis de la formation.
-
-## Déploiement AWS : démonstration distincte
-
-Le support de formation prévoit également une étape relative à **AWS API Gateway et AWS Lambda**. Cette partie est traitée séparément du parcours principal de versions Docker : elle illustre une architecture de déploiement cloud plutôt qu'une nouvelle version cumulative de l'API.
-
-## Référence
-
-- [OWASP API Security Top 10 — 2023](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
-
----
-
-**StockLine API** est un projet de démonstration destiné à l'apprentissage de la sécurité des API.
+Branche `01-authentification` : ajout de l'authentification JWT pour illustrer **API2:2023 — Broken Authentication**.
