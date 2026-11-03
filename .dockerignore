@@ -1,15 +1,12 @@
-.git
-.github
-.venv
-__pycache__/
-*.py[cod]
-.pytest_cache/
+# Jamais dans l'image : secrets, certificats, configuration de la passerelle, fichiers locaux
+secrets/
+passerelle/
 *.db
-*.sqlite*
-.env
-.env.*
-.secret-jwt
-api.log
-tests/
-README.md
-relancer-api.sh
+relance.log
+tests.log
+__pycache__/
+.pytest_cache/
+.git/
+
+.venv/
+*.py[cod]

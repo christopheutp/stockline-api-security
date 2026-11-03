@@ -1,129 +1,104 @@
-# StockLine — Démonstration 04 : limitation des ressources (OWASP API4:2023)
+# StockLine — Démonstration 05 : passerelle HTTPS et durcissement
 
-**Branche Git : `04-limitation-ressources` · Tag Git : `v0.4` · Docker : `christopheutp/stockline-api:0.4` · Port hôte : `8004`**
+**Branche Git :** `05-passerelle` · **Tag Git :** `v0.5` · **Docker Hub :** `christopheutp/stockline-api:0.5`.
 
-Cette branche reprend **toutes les protections des démos 01 à 03**, puis intègre les fichiers `demo.zip/ex4/` : `app/main.py`, `app/models.py`, `app/securite.py`, `tests/test_ex4_ressources.py`.
+> **Source de référence : `demo.zip/ex5/`**. Les fichiers `Dockerfile`, `compose.yaml`, `.dockerignore` (complété pour le développement) et `passerelle/nginx.conf` proviennent de l’EX5 fourni. Le code Python reste celui de l’EX4 : cette démonstration porte sur **l'infrastructure**, pas sur une nouvelle version de l'API métier. Les anciennes démonstrations restent cumulées.
 
-> **Laboratoire uniquement** : ne pas exposer publiquement. Le mécanisme de blocage des connexions est en mémoire, propre à chaque processus ; il ne remplace pas un rate limiting distribué ou une protection en passerelle.
+## Nouveautés de l'EX5
 
-## Pourquoi cette démonstration ?
+- **HTTPS en frontal** : une passerelle Nginx écoute sur `https://localhost:8443`. Seule la passerelle publie un port ; l'API reste sur le réseau Docker interne.
+- **Limitation des requêtes** : quotas par IP dans Nginx pour l'API et `/auth/jeton` (HTTP **429** en cas de dépassement) ; taille de corps maximale de 16 Ko (**413**).
+- **Durcissement** : délais de connexion et de réponse, en-têtes de sécurité, méthodes HTTP filtrées, routes Swagger/OpenAPI masquées, journaux JSON.
+- **Durcissement Docker** : API sans utilisateur root, système de fichiers en lecture seule, répertoire temporaire en mémoire, capacités Linux supprimées, limites CPU/mémoire/processus.
+- **Secret JWT Docker Compose** : stocké dans un fichier local **non suivi par Git**, monté comme secret, lu par `STOCKLINE_JWT_SECRET_FILE`.
+- **Dockerfile multi-étapes** : cibles `tests` et `production`.
 
-**OWASP API4:2023 — Unrestricted Resource Consumption.** Sans limites, un client peut demander d'immenses réponses, soumettre des quantités aberrantes ou multiplier les essais d'authentification.
+**Correspondances pédagogiques :** OWASP API4:2023 (consommation excessive de ressources), API8:2023 (mauvaises configurations de sécurité), API9:2023 (gestion de l'inventaire des API, dont les interfaces exposées). Ces protections illustrent des mesures partielles, pas une conformité OWASP complète.
 
-| Risque | Modification dans EX4 | Résultat attendu |
-|---|---|---|
-| Listes très volumineuses | `GET /produits` et `GET /mouvements` acceptent `limit` (1 à 100, défaut 20) et `offset` (≥ 0) | `limit=1000` → **422** ; page valide → **200** |
-| Mouvements excessifs | `MouvementCreate.quantite` limitée à 10 000 | `quantite=1000000` → **422** |
-| Tentatives répétées de connexion | 5 échecs récents pour un identifiant → blocage pendant la fenêtre de 5 minutes | Tentative suivante → **429** et `Retry-After: 300` |
+## Lancer la démonstration EX5 (Windows PowerShell + Docker Desktop)
 
-Les règles de limitation de la connexion sont **par identifiant**, pas par adresse IP. Le blocage est simplifié pour la démo : après 5 échecs, même le mot de passe valide est temporairement refusé ; la réussite ne réinitialise pas explicitement un historique d'échecs antérieurs. Une défense réelle doit aussi considérer les risques de déni de service par blocage ciblé, plusieurs instances et la surveillance.
-
-## Lancer sous Windows PowerShell
+Depuis **la racine de cette branche**, créer les répertoires locaux ignorés par Git :
 
 ```powershell
-$env:STOCKLINE_JWT_SECRET = ([guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N'))
-docker pull christopheutp/stockline-api:0.4
-docker run --rm --name stockline-04 -p 127.0.0.1:8004:8000 -e STOCKLINE_JWT_SECRET christopheutp/stockline-api:0.4
+New-Item -ItemType Directory -Force secrets, passerelle/certs | Out-Null
+$secret = ([guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N'))
+[System.IO.File]::WriteAllText((Join-Path (Get-Location) 'secrets/jwt_secret.txt'), $secret)
 ```
 
-**Swagger :** <http://localhost:8004/docs> · **Santé :** <http://localhost:8004/sante>. Arrêter avec `Ctrl+C` ; les données SQLite du conteneur seront réinitialisées au prochain lancement.
+Pour une formation, cette génération est suffisante ; en production, utiliser un générateur cryptographique dédié et un gestionnaire de secrets.
 
-La même image peut aussi lire son secret depuis un fichier via `STOCKLINE_JWT_SECRET_FILE` (prévoir un montage Docker approprié). Ne commite jamais de vrai secret dans Git.
-
-## Démonstrations comparatives (versions 03 / 04)
-
-Lancer la version 03 dans un autre terminal sur le port 8003, puis utiliser un **nouveau** PowerShell pour les appels ci-dessous :
+**Certificat local autosigné** : si OpenSSL est installé sur le poste, exécuter :
 
 ```powershell
-function Get-StocklineToken($port, $identifiant, $motDePasse) {
-    $corps = @{ identifiant = $identifiant; mot_de_passe = $motDePasse } | ConvertTo-Json
-    (Invoke-RestMethod -Uri "http://localhost:$port/auth/jeton" -Method Post -ContentType 'application/json' -Body $corps).access_token
-}
-$admin03 = Get-StocklineToken 8003 'admin' 'Admin-Stock-2026'
-$admin04 = Get-StocklineToken 8004 'admin' 'Admin-Stock-2026'
-$alice04 = Get-StocklineToken 8004 'alice' 'Paris-Stock-2026'
+openssl req -x509 -nodes -newkey rsa:2048 -days 30 -keyout passerelle/certs/stockline.key -out passerelle/certs/stockline.crt -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost'
 ```
 
-### A — Pagination
+Sinon, utiliser Docker (la première exécution télécharge Alpine et OpenSSL) :
 
 ```powershell
-# Version 03 : pas de paramètre de pagination, renvoie toute la liste
-curl.exe -i -H "Authorization: Bearer $admin03" "http://localhost:8003/produits?limit=2&offset=2"
-# Version 04 : uniquement les produits 3 et 4
-curl.exe -i -H "Authorization: Bearer $admin04" "http://localhost:8004/produits?limit=2&offset=2"
-# Version 04 : limite maximale dépassée (422)
-curl.exe -i -H "Authorization: Bearer $admin04" "http://localhost:8004/produits?limit=1000"
+docker run --rm -v "${PWD}/passerelle/certs:/certs" alpine:3.20 sh -c "apk add --no-cache openssl >/dev/null && openssl req -x509 -nodes -newkey rsa:2048 -days 30 -keyout /certs/stockline.key -out /certs/stockline.crt -subj /CN=localhost -addext subjectAltName=DNS:localhost"
 ```
 
-### B — Quantité de mouvement plafonnée
+Démarrer l'ensemble **API + passerelle** :
 
 ```powershell
-$corps = '{"produit_id":1,"type":"entree","quantite":1000000}'
-curl.exe -i -X POST "http://localhost:8004/mouvements" -H "Authorization: Bearer $alice04" -H "Content-Type: application/json" --data-raw $corps
+docker compose up --build -d
 ```
 
-**Résultat attendu : 422** (quantité supérieure à 10 000).
-
-### C — Blocage après cinq échecs d'authentification
+L'API est accessible **uniquement** par `https://localhost:8443/sante` depuis le poste. Le certificat est autosigné : pour un essai local en ligne de commande, `curl.exe -k` ignore sa validation. **Ne pas utiliser `-k` en production.**
 
 ```powershell
-$uri = 'http://localhost:8004/auth/jeton'
-$erreur = @{ identifiant = 'bruno'; mot_de_passe = 'mauvais' } | ConvertTo-Json
-1..5 | ForEach-Object {
-  $r = Invoke-WebRequest -Uri $uri -Method Post -ContentType 'application/json' -Body $erreur -SkipHttpErrorCheck
-  "Tentative $_ : $($r.StatusCode)"
-}
-$valide = @{ identifiant = 'bruno'; mot_de_passe = 'Lyon-Stock-2026' } | ConvertTo-Json
-$r = Invoke-WebRequest -Uri $uri -Method Post -ContentType 'application/json' -Body $valide -SkipHttpErrorCheck
-"Compte bloqué : $($r.StatusCode) — Retry-After : $($r.Headers['Retry-After'])"
+curl.exe -k -i https://localhost:8443/sante
+curl.exe -k -i https://localhost:8443/docs
 ```
 
-Cette variante utilise **PowerShell 7+** (`-SkipHttpErrorCheck`). Sous Windows PowerShell 5.1, utiliser Swagger ou `curl.exe` pour observer les codes 401 puis 429. Le blocage est **indépendant pour chaque identifiant** : Alice reste accessible.
+Résultats attendus : `/sante` → **200** ; `/docs` → **404**. Un accès direct `http://localhost:8000` à l'API **de ce Compose** n'est pas publié (sauf si tu as indépendamment lancé une autre version sur ce port).
 
-> Attention : après ces cinq échecs, le compte `bruno` reste bloqué pendant la fenêtre de cinq minutes dans le conteneur 04. Pour recommencer immédiatement la démo, arrêter et recréer le conteneur.
-
-## Identifiants du laboratoire
-
-| Compte | Mot de passe | Rôle |
-|---|---|---|
-| `alice` | `Paris-Stock-2026` | Gestionnaire Paris |
-| `bruno` | `Lyon-Stock-2026` | Gestionnaire Lyon |
-| `admin` | `Admin-Stock-2026` | Administrateur |
-
-## Toutes les versions en parallèle
-
-| Démo | Tag Docker | Port hôte | Swagger |
-|---|---|---:|---|
-| 00 — Initiale | `0.0` | 8000 | <http://localhost:8000/docs> |
-| 01 — JWT | `0.1` | 8001 | <http://localhost:8001/docs> |
-| 02 — Autorisations | `0.2` | 8002 | <http://localhost:8002/docs> |
-| 03 — Propriétés | `0.3` | 8003 | <http://localhost:8003/docs> |
-| **04 — Ressources** | **`0.4`** | **8004** | <http://localhost:8004/docs> |
-
-Chaque conteneur écoute sur **8000 à l'intérieur**. Utiliser un nom distinct pour chaque `docker run`. Chaque instance dispose de sa base SQLite propre et de son état de limitation des connexions.
-
-## Tests et publication automatique
+Pour observer les logs ou arrêter :
 
 ```powershell
-python -m pip install -r requirements.txt
+docker compose logs -f passerelle
+docker compose down
+```
+
+`docker compose down -v` supprime **également les données SQLite** du volume : n'utiliser cette variante que pour remettre à zéro la démonstration.
+
+> Remarque : l'EX5 livré utilise un certificat de laboratoire et des quotas Nginx en mémoire par instance. Il ne met pas en place de certificats publics, de gestion multi-instance du rate limiting, de WAF ni de déploiement AWS Lambda.
+
+## Tester et publier sur GitHub
+
+Les tests applicatifs des démos 00 à 04 sont conservés ; **l'EX5 ne fournit aucun nouveau fichier de test Python**. La CI lance les tests existants et construit l'image `production`. Le comportement Nginx/HTTPS doit être vérifié par les commandes ci-dessus.
+
+```powershell
+python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest -q
 ```
 
-À chaque push sur `04-limitation-ressources`, GitHub Actions lance les tests. Le tag Git `v0.4` déclenche ensuite la construction et la publication de **`christopheutp/stockline-api:0.4`** pour `linux/amd64` et `linux/arm64`, avec le secret GitHub existant `DOCKERHUB_TOKEN`.
+La publication Docker est déclenchée par le tag Git `v0.5` ou manuellement depuis la branche `05-passerelle` :
 
 ```powershell
-git switch 03-protection-donnees
-git pull origin 03-protection-donnees
-git switch -c 04-limitation-ressources
-# À ce stade, remplacer les fichiers de la racine du dépôt par ceux de cette archive.
+git switch 04-limitation-ressources
+git pull origin 04-limitation-ressources
+git switch -c 05-passerelle
+# Copier les fichiers de cette archive à la racine du dépôt
 git add .
-git commit -m "Demo 04 - Limitation des ressources OWASP API4"
-git push -u origin 04-limitation-ressources
-# Une fois le workflow de tests validé :
-git tag v0.4
-git push origin v0.4
+git commit -m "Demo 05 - Passerelle HTTPS Nginx (EX5)"
+git push -u origin 05-passerelle
+git tag v0.5
+git push origin v0.5
 ```
 
-## Suite de la formation
+L'image Docker `0.5` ne contient **que l'API** ; la passerelle Nginx et le réseau privé sont orchestrés par `compose.yaml`. Le simple `docker run` de `0.5` ne reproduit pas l'EX5 complet. Le dépôt Docker Hub conserve malgré tout un tag `0.5` cohérent avec la progression.
 
-L'EX5 de `demo.zip` concerne **une passerelle Nginx avec un Dockerfile et un fichier Compose**, et non la protection supplémentaire du code Python. Il pourra constituer une démonstration distincte, séparée du périmètre 00–04.
+## Ports de la formation
+
+| Version | Exécution | Port hôte |
+|---|---|---:|
+| 00 | `stockline-api:0.0` | 8000 |
+| 01 | `stockline-api:0.1` | 8001 |
+| 02 | `stockline-api:0.2` | 8002 |
+| 03 | `stockline-api:0.3` | 8003 |
+| 04 | `stockline-api:0.4` | 8004 |
+| **05 — passerelle** | **`docker compose up --build -d`** | **8443 (HTTPS)** |
+
+Les ports 8000–8004 concernent les conteneurs antérieurs lancés séparément. Le Compose de l'EX5 n'expose que la passerelle 8443.

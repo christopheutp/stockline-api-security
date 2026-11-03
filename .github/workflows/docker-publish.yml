@@ -3,9 +3,9 @@ name: Tests et publication Docker
 on:
   push:
     branches:
-      - 04-limitation-ressources
+      - 05-passerelle
     tags:
-      - 'v0.4'
+      - 'v0.5'
   workflow_dispatch:
 
 permissions:
@@ -15,38 +15,34 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Récupérer le code
-        uses: actions/checkout@v6
-      - name: Installer Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
       - name: Installer les dépendances
-        run: pip install -r requirements.txt
-      - name: Tests de l'API
-        run: pytest -q
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Tester l'API
+        run: python -m pytest -q
+      - name: Construire l'image de production
+        run: docker build --target production -t stockline-ci:local .
 
   docker:
     needs: test
     runs-on: ubuntu-latest
-    # Seul le tag Git v0.4 (ou le déclenchement manuel sur cette branche)
-    # publie l'image Docker 0.4 : un push sur la branche lance seulement les tests.
-    if: github.ref == 'refs/tags/v0.4' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/04-limitation-ressources')
+    if: github.ref == 'refs/tags/v0.5' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/05-passerelle')
     steps:
-      - name: Récupérer le code
-        uses: actions/checkout@v6
-      - name: Configurer Docker Buildx
-        uses: docker/setup-buildx-action@v4
-      - name: Connexion à Docker Hub
-        uses: docker/login-action@v4
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           username: christopheutp
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Construire et publier
-        uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@v6
         with:
           context: .
+          target: production
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: christopheutp/stockline-api:0.4
+          tags: christopheutp/stockline-api:0.5
