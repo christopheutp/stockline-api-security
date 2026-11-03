@@ -2,6 +2,7 @@
 
 Exercice 1 : toutes les routes, sauf /sante et /auth/jeton, exigent un jeton.
 Exercice 2 : un gestionnaire ne voit que son entrepôt ; supprimer est réservé à l'admin.
+Exercice 3 : l'API choisit les champs qui entrent et qui sortent (models.py).
 
 Lancement en local :
     uvicorn app.main:app --reload
@@ -19,7 +20,7 @@ from app import models, securite
 from app.db import MouvementDB, ProduitDB, get_session, init_db
 from app.securite import Utilisateur, exiger_role, utilisateur_courant
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 
 @asynccontextmanager
@@ -99,9 +100,9 @@ def lister_produits(
 def creer_produit(
     produit: models.ProduitCreate,
     session: Session = Depends(get_session),
-    utilisateur: Utilisateur = Depends(utilisateur_courant),
+    utilisateur: Utilisateur = Depends(exiger_role("gestionnaire")),
 ) -> ProduitDB:
-    """Crée un produit. La référence doit être unique."""
+    """Crée un produit dans l'entrepôt du gestionnaire. La référence doit être unique."""
     existant = session.execute(
         select(ProduitDB).where(ProduitDB.reference == produit.reference)
     ).scalar_one_or_none()
@@ -110,7 +111,7 @@ def creer_produit(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"La référence '{produit.reference}' existe déjà.",
         )
-    nouveau = ProduitDB(**produit.model_dump())
+    nouveau = ProduitDB(**produit.model_dump(), entrepot=utilisateur.entrepot)
     session.add(nouveau)
     session.commit()
     session.refresh(nouveau)

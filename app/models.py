@@ -1,7 +1,10 @@
 """StockLine — schémas Pydantic (validation des entrées et des sorties de l'API).
 
-- les modèles ``...Create`` : ce que le client envoie (POST) ;
-- les modèles de lecture : ce que l'API renvoie.
+- les modèles ``...Create`` : ce que le client a le droit d'envoyer (POST) ;
+- les modèles de lecture : ce que l'API a le droit de renvoyer.
+
+Exercice 3 : ces deux listes de champs sont écrites explicitement.
+Un champ absent d'un modèle n'entre pas (refus 422) et ne sort pas.
 """
 
 from datetime import datetime
@@ -23,22 +26,31 @@ class TypeMouvement(str, Enum):
 # ---------------------------------------------------------------------------
 
 class ProduitCreate(BaseModel):
-    """Données attendues pour créer un produit."""
+    """Champs qu'un client peut fournir pour créer un produit.
+
+    Pas d'entrepôt : c'est le serveur qui le fixe, d'après le jeton.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     reference: str = Field(min_length=1, max_length=50, examples=["SSD-1000"])
     nom: str = Field(min_length=1, max_length=200, examples=["Disque SSD 1 To"])
     prix_unitaire: float = Field(gt=0, examples=[89.90])
     prix_achat: float = Field(gt=0, description="Prix payé au fournisseur", examples=[48.00])
     seuil_alerte: int = Field(default=5, ge=0, description="Stock minimal avant alerte")
-    entrepot: str = Field(min_length=1, max_length=20, examples=["paris"])
 
 
-class Produit(ProduitCreate):
-    """Produit tel que renvoyé par l'API."""
+class Produit(BaseModel):
+    """Champs qu'un client peut lire. Le prix d'achat, donnée interne, n'en fait pas partie."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    reference: str
+    nom: str
+    prix_unitaire: float
+    seuil_alerte: int
+    entrepot: str
     cree_le: datetime
 
 
@@ -47,7 +59,9 @@ class Produit(ProduitCreate):
 # ---------------------------------------------------------------------------
 
 class MouvementCreate(BaseModel):
-    """Données attendues pour enregistrer un mouvement de stock."""
+    """Champs qu'un client peut fournir pour enregistrer un mouvement de stock."""
+
+    model_config = ConfigDict(extra="forbid")
 
     produit_id: int = Field(gt=0)
     type: TypeMouvement
@@ -58,7 +72,7 @@ class MouvementCreate(BaseModel):
 class Mouvement(MouvementCreate):
     """Mouvement tel que renvoyé par l'API."""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
     id: int
     cree_le: datetime
