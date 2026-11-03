@@ -1,98 +1,129 @@
-# StockLine — Démonstration 03 : protection des propriétés (OWASP API3:2023)
+# StockLine — Démonstration 04 : limitation des ressources (OWASP API4:2023)
 
-**Branche Git : `03-protection-donnees` · Tag Git : `v0.3` · Docker : `christopheutp/stockline-api:0.3` · Port hôte : `8003`**
+**Branche Git : `04-limitation-ressources` · Tag Git : `v0.4` · Docker : `christopheutp/stockline-api:0.4` · Port hôte : `8004`**
 
-Cette branche dérive de `02-autorisation` et ajoute les fichiers officiels de l'exercice 3 : `app/main.py`, `app/models.py`, `tests/test_ex3_proprietes.py`. Les protections JWT et les contrôles par rôle / entrepôt des étapes 01 et 02 restent actifs.
+Cette branche reprend **toutes les protections des démos 01 à 03**, puis intègre les fichiers `demo.zip/ex4/` : `app/main.py`, `app/models.py`, `app/securite.py`, `tests/test_ex4_ressources.py`.
 
-> **Laboratoire uniquement** : utilisateurs et mots de passe fictifs, vulnérabilités résiduelles volontaires. Ne pas exposer cette API à Internet et ne pas utiliser de données réelles.
+> **Laboratoire uniquement** : ne pas exposer publiquement. Le mécanisme de blocage des connexions est en mémoire, propre à chaque processus ; il ne remplace pas un rate limiting distribué ou une protection en passerelle.
 
-## Objectif OWASP
+## Pourquoi cette démonstration ?
 
-**API3:2023 — Broken Object Property Level Authorization**. L'API doit contrôler **quelles propriétés le client peut modifier** (mass assignment) et **quelles propriétés peuvent être révélées** en sortie (excessive data exposure).
+**OWASP API4:2023 — Unrestricted Resource Consumption.** Sans limites, un client peut demander d'immenses réponses, soumettre des quantités aberrantes ou multiplier les essais d'authentification.
 
-- `ProduitCreate` énumère explicitement les champs autorisés en entrée et interdit les champs supplémentaires (`extra="forbid"`) : un client ne peut pas forcer `entrepot`, `id` ou des champs internes.
-- `Produit` (modèle de sortie) ne révèle pas `prix_achat`, information interne, tout en conservant les champs publics.
-- Les contraintes Pydantic valident les prix, quantités, longueurs et formats.
-- Les contrôles d'autorisation de la version 02 restent nécessaires : les DTO ne remplacent pas BOLA/BFLA.
+| Risque | Modification dans EX4 | Résultat attendu |
+|---|---|---|
+| Listes très volumineuses | `GET /produits` et `GET /mouvements` acceptent `limit` (1 à 100, défaut 20) et `offset` (≥ 0) | `limit=1000` → **422** ; page valide → **200** |
+| Mouvements excessifs | `MouvementCreate.quantite` limitée à 10 000 | `quantite=1000000` → **422** |
+| Tentatives répétées de connexion | 5 échecs récents pour un identifiant → blocage pendant la fenêtre de 5 minutes | Tentative suivante → **429** et `Retry-After: 300` |
 
-## Lancer la version 03 sous Windows PowerShell
+Les règles de limitation de la connexion sont **par identifiant**, pas par adresse IP. Le blocage est simplifié pour la démo : après 5 échecs, même le mot de passe valide est temporairement refusé ; la réussite ne réinitialise pas explicitement un historique d'échecs antérieurs. Une défense réelle doit aussi considérer les risques de déni de service par blocage ciblé, plusieurs instances et la surveillance.
+
+## Lancer sous Windows PowerShell
 
 ```powershell
 $env:STOCKLINE_JWT_SECRET = ([guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N'))
-docker pull christopheutp/stockline-api:0.3
-docker run --rm --name stockline-03 -p 127.0.0.1:8003:8000 -e STOCKLINE_JWT_SECRET christopheutp/stockline-api:0.3
+docker pull christopheutp/stockline-api:0.4
+docker run --rm --name stockline-04 -p 127.0.0.1:8004:8000 -e STOCKLINE_JWT_SECRET christopheutp/stockline-api:0.4
 ```
 
-Swagger : <http://localhost:8003/docs> · Santé : <http://localhost:8003/sante>. Pour arrêter : `Ctrl+C`. La base SQLite est éphémère et isolée par conteneur.
+**Swagger :** <http://localhost:8004/docs> · **Santé :** <http://localhost:8004/sante>. Arrêter avec `Ctrl+C` ; les données SQLite du conteneur seront réinitialisées au prochain lancement.
 
-## Comparer les versions 02 et 03
+La même image peut aussi lire son secret depuis un fichier via `STOCKLINE_JWT_SECRET_FILE` (prévoir un montage Docker approprié). Ne commite jamais de vrai secret dans Git.
 
-Lancer la version 02 sur le port 8002 dans **un autre terminal** (avec sa variable `STOCKLINE_JWT_SECRET` définie). Dans un troisième PowerShell, demander un JWT à chaque API :
+## Démonstrations comparatives (versions 03 / 04)
+
+Lancer la version 03 dans un autre terminal sur le port 8003, puis utiliser un **nouveau** PowerShell pour les appels ci-dessous :
 
 ```powershell
 function Get-StocklineToken($port, $identifiant, $motDePasse) {
     $corps = @{ identifiant = $identifiant; mot_de_passe = $motDePasse } | ConvertTo-Json
     (Invoke-RestMethod -Uri "http://localhost:$port/auth/jeton" -Method Post -ContentType 'application/json' -Body $corps).access_token
 }
-$alice02 = Get-StocklineToken 8002 'alice' 'Paris-Stock-2026'
-$alice03 = Get-StocklineToken 8003 'alice' 'Paris-Stock-2026'
+$admin03 = Get-StocklineToken 8003 'admin' 'Admin-Stock-2026'
+$admin04 = Get-StocklineToken 8004 'admin' 'Admin-Stock-2026'
+$alice04 = Get-StocklineToken 8004 'alice' 'Paris-Stock-2026'
 ```
 
-### 1. Vérifier la confidentialité en lecture
+### A — Pagination
 
 ```powershell
-# Sur 02, inspecter si le champ interne prix_achat est présent
-curl.exe -s -H "Authorization: Bearer $alice02" http://localhost:8002/produits/1
-# Sur 03, le champ prix_achat ne doit plus apparaître
-curl.exe -s -H "Authorization: Bearer $alice03" http://localhost:8003/produits/1
+# Version 03 : pas de paramètre de pagination, renvoie toute la liste
+curl.exe -i -H "Authorization: Bearer $admin03" "http://localhost:8003/produits?limit=2&offset=2"
+# Version 04 : uniquement les produits 3 et 4
+curl.exe -i -H "Authorization: Bearer $admin04" "http://localhost:8004/produits?limit=2&offset=2"
+# Version 04 : limite maximale dépassée (422)
+curl.exe -i -H "Authorization: Bearer $admin04" "http://localhost:8004/produits?limit=1000"
 ```
 
-### 2. Vérifier les propriétés autorisées en écriture
-
-Consulter dans Swagger les champs acceptés par `POST /produits` en 02 et 03. Avec l'étape 03, envoyer un champ supplémentaire (`entrepot`) provoque une erreur de validation `422` :
+### B — Quantité de mouvement plafonnée
 
 ```powershell
-$payload = '{"reference":"DEMO-03","nom":"Produit test","prix_unitaire":10,"prix_achat":5,"seuil_alerte":2,"entrepot":"Lyon"}'
-curl.exe -i -X POST http://localhost:8003/produits -H "Authorization: Bearer $alice03" -H "Content-Type: application/json" --data-raw $payload
+$corps = '{"produit_id":1,"type":"entree","quantite":1000000}'
+curl.exe -i -X POST "http://localhost:8004/mouvements" -H "Authorization: Bearer $alice04" -H "Content-Type: application/json" --data-raw $corps
 ```
 
-**Important :** le prix d'achat est accepté à la création (champ métier) mais masqué dans les réponses. L'entrepôt est imposé côté serveur selon le JWT.
+**Résultat attendu : 422** (quantité supérieure à 10 000).
 
-## Comptes de laboratoire
+### C — Blocage après cinq échecs d'authentification
 
-| Identifiant | Mot de passe | Profil |
+```powershell
+$uri = 'http://localhost:8004/auth/jeton'
+$erreur = @{ identifiant = 'bruno'; mot_de_passe = 'mauvais' } | ConvertTo-Json
+1..5 | ForEach-Object {
+  $r = Invoke-WebRequest -Uri $uri -Method Post -ContentType 'application/json' -Body $erreur -SkipHttpErrorCheck
+  "Tentative $_ : $($r.StatusCode)"
+}
+$valide = @{ identifiant = 'bruno'; mot_de_passe = 'Lyon-Stock-2026' } | ConvertTo-Json
+$r = Invoke-WebRequest -Uri $uri -Method Post -ContentType 'application/json' -Body $valide -SkipHttpErrorCheck
+"Compte bloqué : $($r.StatusCode) — Retry-After : $($r.Headers['Retry-After'])"
+```
+
+Cette variante utilise **PowerShell 7+** (`-SkipHttpErrorCheck`). Sous Windows PowerShell 5.1, utiliser Swagger ou `curl.exe` pour observer les codes 401 puis 429. Le blocage est **indépendant pour chaque identifiant** : Alice reste accessible.
+
+> Attention : après ces cinq échecs, le compte `bruno` reste bloqué pendant la fenêtre de cinq minutes dans le conteneur 04. Pour recommencer immédiatement la démo, arrêter et recréer le conteneur.
+
+## Identifiants du laboratoire
+
+| Compte | Mot de passe | Rôle |
 |---|---|---|
 | `alice` | `Paris-Stock-2026` | Gestionnaire Paris |
 | `bruno` | `Lyon-Stock-2026` | Gestionnaire Lyon |
 | `admin` | `Admin-Stock-2026` | Administrateur |
 
-## Plusieurs versions sur le même ordinateur
+## Toutes les versions en parallèle
 
-| Version | Tag Docker | Port hôte | Swagger |
+| Démo | Tag Docker | Port hôte | Swagger |
 |---|---|---:|---|
-| 00 — Vulnérable | `0.0` | 8000 | <http://localhost:8000/docs> |
+| 00 — Initiale | `0.0` | 8000 | <http://localhost:8000/docs> |
 | 01 — JWT | `0.1` | 8001 | <http://localhost:8001/docs> |
 | 02 — Autorisations | `0.2` | 8002 | <http://localhost:8002/docs> |
-| **03 — Propriétés** | **`0.3`** | **8003** | <http://localhost:8003/docs> |
-| 04 — Ressources (future) | `0.4` | 8004 | <http://localhost:8004/docs> |
+| 03 — Propriétés | `0.3` | 8003 | <http://localhost:8003/docs> |
+| **04 — Ressources** | **`0.4`** | **8004** | <http://localhost:8004/docs> |
 
-Tous les conteneurs utilisent le port **8000 à l'intérieur** et un nom différent. Les images 00 à 02 doivent avoir été publiées auparavant.
+Chaque conteneur écoute sur **8000 à l'intérieur**. Utiliser un nom distinct pour chaque `docker run`. Chaque instance dispose de sa base SQLite propre et de son état de limitation des connexions.
 
 ## Tests et publication automatique
 
 ```powershell
 python -m pip install -r requirements.txt
-pytest -q
+python -m pytest -q
 ```
 
-GitHub Actions lance les tests sur chaque push de la branche `03-protection-donnees`. Le push du tag Git `v0.3` déclenche, après réussite des tests, la publication Docker Hub `christopheutp/stockline-api:0.3` pour `linux/amd64` et `linux/arm64`. Le secret GitHub `DOCKERHUB_TOKEN` est réutilisé.
+À chaque push sur `04-limitation-ressources`, GitHub Actions lance les tests. Le tag Git `v0.4` déclenche ensuite la construction et la publication de **`christopheutp/stockline-api:0.4`** pour `linux/amd64` et `linux/arm64`, avec le secret GitHub existant `DOCKERHUB_TOKEN`.
 
 ```powershell
 git switch 03-protection-donnees
-git tag v0.3
-git push origin v0.3
+git pull origin 03-protection-donnees
+git switch -c 04-limitation-ressources
+# À ce stade, remplacer les fichiers de la racine du dépôt par ceux de cette archive.
+git add .
+git commit -m "Demo 04 - Limitation des ressources OWASP API4"
+git push -u origin 04-limitation-ressources
+# Une fois le workflow de tests validé :
+git tag v0.4
+git push origin v0.4
 ```
 
-## Prochaine démonstration
+## Suite de la formation
 
-**04 — Limitation des ressources** : OWASP API4:2023 — Unrestricted Resource Consumption.
+L'EX5 de `demo.zip` concerne **une passerelle Nginx avec un Dockerfile et un fichier Compose**, et non la protection supplémentaire du code Python. Il pourra constituer une démonstration distincte, séparée du périmètre 00–04.

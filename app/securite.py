@@ -1,7 +1,8 @@
-"""StockLine — authentification par jeton JWT (exercice 1) et rôles (exercice 2).
+"""StockLine — jeton JWT (exercice 1), rôles (exercice 2), limite de tentatives (exercice 4).
 
 Les comptes ci-dessous sont ceux du labo. En production, les comptes vivent
-dans un annuaire (Amazon Cognito, Microsoft Entra ID), jamais dans le code.
+chez un fournisseur d'identité (Keycloak, Microsoft Entra ID, Okta…),
+jamais dans le code.
 """
 
 import hashlib
@@ -21,8 +22,14 @@ ITERATIONS = 600_000  # PBKDF2-SHA256 : valeur recommandée par l'OWASP
 
 
 def _lire_secret() -> str:
-    """Le secret de signature vient de l'environnement, jamais du code."""
-    secret = os.environ.get("STOCKLINE_JWT_SECRET", "")
+    """Le secret de signature vient d'un secret Docker (un fichier monté dans le
+    conteneur) ou, à défaut, de l'environnement. Jamais du code."""
+    chemin = os.environ.get("STOCKLINE_JWT_SECRET_FILE")
+    if chemin:
+        with open(chemin, encoding="utf-8") as fichier:
+            secret = fichier.read().strip()
+    else:
+        secret = os.environ.get("STOCKLINE_JWT_SECRET", "")
     if len(secret) < 32:
         raise RuntimeError(
             "STOCKLINE_JWT_SECRET absent ou trop court (32 caractères minimum) : démarrage refusé."
@@ -143,3 +150,32 @@ def exiger_role(*roles: str):
         return utilisateur
 
     return verifier
+
+
+# ---------------------------------------------------------------------------
+# Exercice 4 : limiter les tentatives de connexion échouées
+# ---------------------------------------------------------------------------
+
+ECHECS_MAX = 5
+FENETRE_ECHECS = timedelta(minutes=5)
+# En mémoire, propre à chaque processus : suffisant pour le labo. En production,
+# un stockage partagé (Redis, DynamoDB) ou le pare-feu applicatif s'en charge.
+_echecs: dict = {}
+
+
+def controler_tentatives(identifiant: str) -> None:
+    """Refuse (429) si ce compte a déjà trop d'échecs récents."""
+    limite = datetime.now(timezone.utc) - FENETRE_ECHECS
+    recents = [t for t in _echecs.get(identifiant, []) if t > limite]
+    _echecs[identifiant] = recents
+    if len(recents) >= ECHECS_MAX:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Trop de tentatives échouées : réessayez dans 5 minutes.",
+            headers={"Retry-After": str(int(FENETRE_ECHECS.total_seconds()))},
+        )
+
+
+def noter_echec(identifiant: str) -> None:
+    """Enregistre une tentative de connexion échouée."""
+    _echecs.setdefault(identifiant, []).append(datetime.now(timezone.utc))

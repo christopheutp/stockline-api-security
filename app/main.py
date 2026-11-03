@@ -3,6 +3,7 @@
 Exercice 1 : toutes les routes, sauf /sante et /auth/jeton, exigent un jeton.
 Exercice 2 : un gestionnaire ne voit que son entrepôt ; supprimer est réservé à l'admin.
 Exercice 3 : l'API choisit les champs qui entrent et qui sortent (models.py).
+Exercice 4 : listes paginées et plafonnées, tentatives de connexion limitées.
 
 Lancement en local :
     uvicorn app.main:app --reload
@@ -12,7 +13,7 @@ Documentation interactive : http://127.0.0.1:8000/docs
 
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
@@ -20,7 +21,7 @@ from app import models, securite
 from app.db import MouvementDB, ProduitDB, get_session, init_db
 from app.securite import Utilisateur, exiger_role, utilisateur_courant
 
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 
 
 @asynccontextmanager
@@ -60,7 +61,9 @@ def sante(session: Session = Depends(get_session)) -> models.Sante:
 @app.post("/auth/jeton", response_model=securite.Jeton, tags=["authentification"])
 def obtenir_jeton(identifiants: securite.Identifiants) -> securite.Jeton:
     """Échange un identifiant et un mot de passe contre un jeton de 15 minutes."""
+    securite.controler_tentatives(identifiants.identifiant)
     if not securite.verifier_mot_de_passe(identifiants.identifiant, identifiants.mot_de_passe):
+        securite.noter_echec(identifiants.identifiant)
         # Même message que le compte existe ou non.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -81,14 +84,16 @@ def moi(utilisateur: Utilisateur = Depends(utilisateur_courant)) -> Utilisateur:
 
 @app.get("/produits", response_model=list[models.Produit], tags=["produits"])
 def lister_produits(
+    limit: int = Query(20, ge=1, le=100, description="Nombre d'éléments (100 au plus)"),
+    offset: int = Query(0, ge=0, description="Nombre d'éléments à sauter"),
     session: Session = Depends(get_session),
     utilisateur: Utilisateur = Depends(utilisateur_courant),
 ) -> list[ProduitDB]:
-    """Liste les produits de l'entrepôt de l'utilisateur (tous pour l'admin)."""
+    """Liste les produits de l'entrepôt de l'utilisateur (tous pour l'admin), page par page."""
     requete = select(ProduitDB).order_by(ProduitDB.id)
     if utilisateur.role != "admin":
         requete = requete.where(ProduitDB.entrepot == utilisateur.entrepot)
-    return list(session.execute(requete).scalars())
+    return list(session.execute(requete.limit(limit).offset(offset)).scalars())
 
 
 @app.post(
@@ -185,14 +190,16 @@ def _quantite_en_stock(session: Session, produit_id: int) -> int:
 
 @app.get("/mouvements", response_model=list[models.Mouvement], tags=["mouvements"])
 def lister_mouvements(
+    limit: int = Query(20, ge=1, le=100, description="Nombre d'éléments (100 au plus)"),
+    offset: int = Query(0, ge=0, description="Nombre d'éléments à sauter"),
     session: Session = Depends(get_session),
     utilisateur: Utilisateur = Depends(utilisateur_courant),
 ) -> list[MouvementDB]:
-    """Liste les mouvements des produits de l'entrepôt de l'utilisateur."""
+    """Liste les mouvements des produits de l'entrepôt de l'utilisateur, page par page."""
     requete = select(MouvementDB).order_by(MouvementDB.id)
     if utilisateur.role != "admin":
         requete = requete.join(ProduitDB).where(ProduitDB.entrepot == utilisateur.entrepot)
-    return list(session.execute(requete).scalars())
+    return list(session.execute(requete.limit(limit).offset(offset)).scalars())
 
 
 @app.post(

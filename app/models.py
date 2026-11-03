@@ -5,6 +5,7 @@
 
 Exercice 3 : ces deux listes de champs sont écrites explicitement.
 Un champ absent d'un modèle n'entre pas (refus 422) et ne sort pas.
+Exercice 4 : chaque valeur numérique a un plafond.
 """
 
 from datetime import datetime
@@ -35,9 +36,9 @@ class ProduitCreate(BaseModel):
 
     reference: str = Field(min_length=1, max_length=50, examples=["SSD-1000"])
     nom: str = Field(min_length=1, max_length=200, examples=["Disque SSD 1 To"])
-    prix_unitaire: float = Field(gt=0, examples=[89.90])
-    prix_achat: float = Field(gt=0, description="Prix payé au fournisseur", examples=[48.00])
-    seuil_alerte: int = Field(default=5, ge=0, description="Stock minimal avant alerte")
+    prix_unitaire: float = Field(gt=0, le=100_000, examples=[89.90])
+    prix_achat: float = Field(gt=0, le=100_000, description="Prix payé au fournisseur", examples=[48.00])
+    seuil_alerte: int = Field(default=5, ge=0, le=10_000, description="Stock minimal avant alerte")
 
 
 class Produit(BaseModel):
@@ -65,7 +66,7 @@ class MouvementCreate(BaseModel):
 
     produit_id: int = Field(gt=0)
     type: TypeMouvement
-    quantite: int = Field(gt=0, examples=[10])
+    quantite: int = Field(gt=0, le=10_000, examples=[10])
     commentaire: Optional[str] = Field(default=None, max_length=300)
 
 
